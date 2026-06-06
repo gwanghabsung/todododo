@@ -320,6 +320,27 @@ input::placeholder { color: var(--text-3); }
 .view.readonly .todo-check { pointer-events: none; opacity: 0.4; }
 .view.readonly .chip { cursor: default; }
 .view.readonly .chip:hover { background: var(--bg-1); border-color: var(--border); color: var(--text-1); }
+.view.readonly .reset-day-row { display: none !important; }
+
+/* reset day button */
+.reset-day-row { margin-top: 14px; display: flex; justify-content: flex-end; }
+.reset-day-btn {
+  padding: 7px 14px;
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  transition: all 0.15s;
+}
+.reset-day-btn:hover { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-fade); }
+
+/* missed (어제 미완료 처리된 항목) - day-detail에서 사용 */
+.day-detail-item.missed::before { content: '✗'; color: var(--danger); }
+.day-detail-item.missed { color: var(--text-2); }
 
 .empty {
   padding: 32px 20px; text-align: center;
@@ -439,8 +460,22 @@ input::placeholder { color: var(--text-3); }
 .top-count { font-family: var(--font-mono); font-size: 13px; color: var(--text-2); }
 .top-count strong { color: var(--text-0); font-weight: 600; }
 
-.bar-chart { width: 100%; display: flex; align-items: flex-end; gap: 3px; height: 120px; padding-top: 16px; }
-.bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
+.bar-chart { width: 100%; }
+.chart-plot {
+  position: relative;
+  height: 120px;
+  padding-top: 20px;
+  box-sizing: border-box;
+}
+.chart-bars {
+  display: flex; align-items: flex-end; gap: 3px;
+  height: 100%;
+}
+.chart-bars .bar-col {
+  flex: 1; height: 100%;
+  display: flex; align-items: flex-end;
+  min-width: 0;
+}
 .bar {
   width: 100%; background: var(--accent-dim);
   border-radius: 2px 2px 0 0; min-height: 2px;
@@ -452,6 +487,63 @@ input::placeholder { color: var(--text-3); }
   position: absolute; top: -14px; left: 50%; transform: translateX(-50%); white-space: nowrap;
 }
 .bar-label { font-family: var(--font-mono); font-size: 9px; color: var(--text-3); white-space: nowrap; }
+
+/* line overlay + dots */
+.line-svg {
+  position: absolute;
+  inset: 20px 0 0 0;
+  width: 100%; height: calc(100% - 20px);
+  pointer-events: none;
+  overflow: visible;
+}
+.line-svg polyline {
+  fill: none;
+  stroke: var(--info);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.dots-layer {
+  position: absolute;
+  inset: 20px 0 0 0;
+  pointer-events: none;
+}
+.dot {
+  position: absolute;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--info);
+  border: 1.5px solid var(--bg-1);
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  cursor: help;
+}
+.chart-x-labels {
+  display: flex; gap: 3px; margin-top: 6px;
+}
+.chart-x-labels > div {
+  flex: 1; text-align: center;
+  color: var(--text-3); font-family: var(--font-mono);
+  font-size: 9px; white-space: nowrap;
+}
+.chart-legend {
+  display: flex; gap: 16px; justify-content: flex-end;
+  margin-top: 14px;
+  font-family: var(--font-mono); font-size: 10px;
+  color: var(--text-2); letter-spacing: 0.05em;
+}
+.chart-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.bar-swatch { width: 10px; height: 10px; background: var(--accent-dim); border-radius: 2px; display: inline-block; }
+.line-swatch { width: 16px; height: 1.5px; background: var(--info); position: relative; display: inline-block; }
+.line-swatch::after {
+  content: ''; position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: 5px; height: 5px;
+  background: var(--info); border: 1.5px solid var(--bg-1);
+  border-radius: 50%;
+}
 
 .toast {
   position: fixed; bottom: 24px; left: 50%;
@@ -535,6 +627,10 @@ input::placeholder { color: var(--text-3); }
 
         <div class="section-label">오늘 할일</div>
         <div class="todos" id="todosList"></div>
+
+        <div class="reset-day-row">
+          <button id="resetDayBtn" class="reset-day-btn" title="오늘의 미완료 항목들을 어제 날짜로 미완료 처리합니다">↺ 하루 초기화</button>
+        </div>
       </div>
 
       <div class="todo-section">
@@ -582,6 +678,8 @@ const GOOGLE_CLIENT_ID = '1077038002206-30kme3htm5kkajnm3idltq8kv09als0k.apps.go
 const FLUSH_DEBOUNCE_MS = 1500;
 const QUEUE_STORAGE_KEY = 'todo_queue_v3';
 const AUTH_STORAGE_KEY = 'todo_auth_v3';
+const DATA_CACHE_PREFIX = 'todo_data_v1_';
+const USERS_CACHE_KEY = 'todo_users_v1';
 
 // ═════════════════════════════════════════════
 // State
@@ -592,6 +690,56 @@ const state = {
   view: 'today', period: 'week',
   calYear: null, calMonth: null, calSelected: null
 };
+
+// ═════════════════════════════════════════════
+// Local data cache (stale-while-revalidate)
+// ═════════════════════════════════════════════
+const dataCache = {
+  key(user) { return DATA_CACHE_PREFIX + user; },
+  get(user) {
+    try {
+      const raw = localStorage.getItem(this.key(user));
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch (e) { return null; }
+  },
+  set(user, data) {
+    try {
+      localStorage.setItem(this.key(user), JSON.stringify({
+        todos: data.todos || [],
+        shortcuts: data.shortcuts || [],
+        completed: data.completed || [],
+        ts: Date.now()
+      }));
+    } catch (e) { /* quota or disabled */ }
+  },
+  clear(user) {
+    try { localStorage.removeItem(this.key(user)); } catch (e) {}
+  }
+};
+
+const usersCache = {
+  get() {
+    try {
+      const raw = localStorage.getItem(USERS_CACHE_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch (e) { return null; }
+  },
+  set(users) {
+    try { localStorage.setItem(USERS_CACHE_KEY, JSON.stringify(users || [])); }
+    catch (e) {}
+  }
+};
+
+function saveCurrentToCache() {
+  if (!state.currentUser) return;
+  dataCache.set(state.currentUser, {
+    todos: state.todos,
+    shortcuts: state.shortcuts,
+    completed: state.completed
+  });
+}
 
 // ═════════════════════════════════════════════
 // Auth
@@ -873,12 +1021,42 @@ async function boot() {
     showToast('API_URL 설정 필요 (index.html 상단)', true);
     return;
   }
+
+  // 1. users 캐시가 있으면 즉시 UI 구성 후, 마지막 유저의 캐시 데이터로 화면 띄움
+  const cachedUsers = usersCache.get();
+  if (cachedUsers && cachedUsers.length) {
+    state.users = cachedUsers;
+    renderAuthArea();
+    renderUserTabs();
+    renderRoBanner();
+
+    // 가능하면 현재 유저 정해서 캐시 데이터 즉시 렌더
+    const me = myUser();
+    if (me) {
+      state.currentUser = me.name;
+    } else {
+      const last = localStorage.getItem('todo_last_user');
+      const found = state.users.find(u => u.name === last);
+      state.currentUser = (found && found.name) || state.users[0].name;
+    }
+    const userCache = dataCache.get(state.currentUser);
+    if (userCache) {
+      state.todos = userCache.todos || [];
+      state.shortcuts = userCache.shortcuts || [];
+      state.completed = userCache.completed || [];
+      renderUserTabs();
+      renderAll();
+    }
+  }
+
   $('#brandSub').textContent = '— CONNECTING';
 
   try {
     if (queue.size() > 0 && auth.isValid()) await queue.flush();
 
+    // 2. 최신 users 가져오기
     state.users = await api('getAllUsers');
+    usersCache.set(state.users);
     renderAuthArea();
     renderUserTabs();
     renderRoBanner();
@@ -903,12 +1081,26 @@ async function boot() {
     console.error(e);
     $('#brandSub').classList.add('error');
     $('#brandSub').textContent = '— ERROR';
-    showToast('초기화 실패: ' + e.message, true);
+    // 캐시가 있어서 화면은 살아있으니 에러만 표시
+    if (!cachedUsers) showToast('초기화 실패: ' + e.message, true);
   }
 }
 
 async function loadUserAll() {
   if (!state.currentUser) return;
+
+  // 1. 캐시 즉시 표시 (있으면 화면 깜빡임 없이 바로 렌더)
+  const cached = dataCache.get(state.currentUser);
+  let hasCached = false;
+  if (cached) {
+    state.todos = cached.todos || [];
+    state.shortcuts = cached.shortcuts || [];
+    state.completed = cached.completed || [];
+    hasCached = true;
+    renderAll();
+  }
+
+  // 2. 백그라운드에서 최신 데이터 가져와 갱신
   try {
     const [ud, completed] = await Promise.all([
       api('getUserData', { user: state.currentUser }),
@@ -917,9 +1109,17 @@ async function loadUserAll() {
     state.todos = ud.todos || [];
     state.shortcuts = ud.shortcuts || [];
     state.completed = completed || [];
+    dataCache.set(state.currentUser, {
+      todos: state.todos,
+      shortcuts: state.shortcuts,
+      completed: state.completed
+    });
     renderAll();
   } catch (e) {
-    showToast('데이터 로드 실패', true);
+    if (!hasCached) {
+      showToast('데이터 로드 실패', true);
+    }
+    // 캐시가 있었으면 그대로 유지 (오프라인 모드)
   }
   refreshBrand();
 }
@@ -1046,6 +1246,7 @@ function renderAll() {
   renderCalendar();
   renderStats();
   refreshBrand();
+  saveCurrentToCache();
 }
 
 // ═════════════════════════════════════════════
@@ -1068,7 +1269,7 @@ function renderTodoListByType(type, wrap) {
   const today = todayStr();
   const doneToday = type === 'today'
     ? state.completed
-        .filter(c => c.completed_date === today)
+        .filter(c => c.completed_date === today && c.status !== 'missed')
         .sort((a, b) => String(a.completed_at).localeCompare(String(b.completed_at)))
     : [];
 
@@ -1233,13 +1434,44 @@ function completeTodo(id) {
   const completed_date = todayStr();
   state.completed.push({
     id: t.id, user: t.user, text: t.text,
-    completed_date, completed_at, created_at: t.created_at
+    completed_date, completed_at, created_at: t.created_at,
+    status: 'done'
   });
   renderTodos();
   renderCalendar();
   renderStats();
   showToast('완료: ' + t.text);
-  queue.push('completeTodo', { id, completed_at, completed_date });
+  queue.push('completeTodo', { id, completed_at, completed_date, status: 'done' });
+}
+
+function resetDay() {
+  if (!guard()) return;
+  const todayItems = state.todos.filter(t => (t.type || 'today') === 'today');
+  if (!todayItems.length) {
+    showToast('오늘 미완료 항목이 없습니다');
+    return;
+  }
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yDateStr = yesterday.getFullYear() + '-' + pad2(yesterday.getMonth()+1) + '-' + pad2(yesterday.getDate());
+
+  if (!confirm(todayItems.length + '개의 미완료 항목을 ' + yDateStr + ' 미완료로 기록하고 오늘 목록을 비웁니다. 계속할까요?')) return;
+
+  const completed_at = nowISO();
+  todayItems.forEach(t => {
+    state.completed.push({
+      id: t.id, user: t.user, text: t.text,
+      completed_date: yDateStr, completed_at,
+      created_at: t.created_at, status: 'missed'
+    });
+    queue.push('completeTodo', {
+      id: t.id, completed_at, completed_date: yDateStr, status: 'missed'
+    });
+  });
+  state.todos = state.todos.filter(t => (t.type || 'today') !== 'today');
+
+  renderAll();
+  showToast(todayItems.length + '개 항목 → ' + yDateStr + ' 미완료 처리됨');
 }
 
 function moveTodo(id, targetType) {
@@ -1333,6 +1565,7 @@ function renderCalendar() {
 
   const countByDate = {};
   state.completed.forEach(c => {
+    if (c.status === 'missed') return;
     countByDate[c.completed_date] = (countByDate[c.completed_date] || 0) + 1;
   });
 
@@ -1378,22 +1611,37 @@ function selectDay(ds) {
   renderCalendar();
   const items = state.completed
     .filter(c => c.completed_date === ds)
-    .sort((a, b) => String(a.completed_at).localeCompare(String(b.completed_at)));
+    .sort((a, b) => {
+      // done 먼저, missed 뒤
+      const sa = a.status === 'missed' ? 1 : 0;
+      const sb = b.status === 'missed' ? 1 : 0;
+      if (sa !== sb) return sa - sb;
+      return String(a.completed_at).localeCompare(String(b.completed_at));
+    });
+
+  const doneCount = items.filter(c => c.status !== 'missed').length;
+  const missedCount = items.filter(c => c.status === 'missed').length;
 
   const detail = $('#dayDetail');
   detail.innerHTML = '';
-  detail.appendChild(el('div', { class: 'day-detail-title' },
-    document.createTextNode('완료기록 · '),
+  const titleChildren = [
+    document.createTextNode('기록 · '),
     el('strong', { text: ds }),
-    document.createTextNode(' · ' + items.length + '건')
-  ));
+    document.createTextNode(' · 완료 ' + doneCount + '건')
+  ];
+  if (missedCount > 0) {
+    titleChildren.push(document.createTextNode(' · 미완료 ' + missedCount + '건'));
+  }
+  detail.appendChild(el('div', { class: 'day-detail-title' }, titleChildren));
+
   if (!items.length) {
-    detail.appendChild(el('div', { class: 'empty', text: '— 이날은 완료된 항목이 없습니다 —' }));
+    detail.appendChild(el('div', { class: 'empty', text: '— 이날은 기록이 없습니다 —' }));
     return;
   }
   const list = el('div', { class: 'day-detail-list' });
   items.forEach(it => {
-    list.appendChild(el('div', { class: 'day-detail-item', text: it.text }));
+    const cls = 'day-detail-item' + (it.status === 'missed' ? ' missed' : '');
+    list.appendChild(el('div', { class: cls, text: it.text }));
   });
   detail.appendChild(list);
 }
@@ -1429,11 +1677,14 @@ function renderStats() {
   const { start, end, bucketType } = getPeriodRange();
   const sTs = start.getTime(), eTs = end.getTime();
 
+  // 'done'만 완료로 카운트 (missed는 통계에서 제외)
   const compIn = state.completed.filter(c => {
+    if (c.status === 'missed') return false;
     const t = new Date(c.completed_at).getTime();
     return t >= sTs && t <= eTs;
   });
 
+  // '추가' 카운트는 missed 포함해서 created_at 기준
   const allCreated = state.todos
     .map(t => ({ created_at: t.created_at }))
     .concat(state.completed.map(c => ({ created_at: c.created_at })));
@@ -1450,7 +1701,7 @@ function renderStats() {
   compIn.forEach(c => { counter[c.text] = (counter[c.text] || 0) + 1; });
   const top = Object.entries(counter).sort((a, b) => b[1] - a[1]).slice(0, 5);
 
-  const buckets = buildBuckets(bucketType, start, end, compIn);
+  const buckets = buildBuckets(bucketType, start, end, compIn, createdIn);
 
   wrap.innerHTML = '';
 
@@ -1480,21 +1731,9 @@ function renderStats() {
   wrap.appendChild(grid);
 
   const chartSec = el('div', { class: 'stats-section' },
-    el('div', { class: 'stats-section-title', text: '완료 추이' })
+    el('div', { class: 'stats-section-title', text: '완료 추이 & 달성률' })
   );
-  const maxV = Math.max(1, ...buckets.map(b => b.value));
-  const chart = el('div', { class: 'bar-chart' });
-  buckets.forEach(b => {
-    const h = (b.value / maxV) * 100;
-    const col = el('div', { class: 'bar-col' },
-      el('div', { class: 'bar', style: 'height:' + h + '%' },
-        b.value > 0 ? el('span', { class: 'bar-val', text: String(b.value) }) : null
-      ),
-      el('div', { class: 'bar-label', text: b.label })
-    );
-    chart.appendChild(col);
-  });
-  chartSec.appendChild(chart);
+  chartSec.appendChild(renderComboChart(buckets));
   wrap.appendChild(chartSec);
 
   const topSec = el('div', { class: 'stats-section' },
@@ -1520,7 +1759,89 @@ function renderStats() {
   wrap.appendChild(topSec);
 }
 
-function buildBuckets(bucketType, start, end, compIn) {
+function renderComboChart(buckets) {
+  const N = buckets.length;
+  const maxDone = Math.max(1, ...buckets.map(b => b.done));
+
+  const chart = el('div', { class: 'bar-chart' });
+  const plot = el('div', { class: 'chart-plot' });
+
+  // 막대
+  const barsRow = el('div', { class: 'chart-bars' });
+  buckets.forEach(b => {
+    const h = (b.done / maxDone) * 100;
+    const col = el('div', { class: 'bar-col' },
+      el('div', { class: 'bar', style: 'height:' + h + '%' },
+        b.done > 0 ? el('span', { class: 'bar-val', text: String(b.done) }) : null
+      )
+    );
+    barsRow.appendChild(col);
+  });
+  plot.appendChild(barsRow);
+
+  // 꺾은선 SVG — created>0 인 구간만 연결, 끊긴 구간은 별도 segment
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('class', 'line-svg');
+  svg.setAttribute('viewBox', '0 0 ' + N + ' 100');
+  svg.setAttribute('preserveAspectRatio', 'none');
+
+  const segments = [];
+  let seg = [];
+  buckets.forEach((b, i) => {
+    if (b.created > 0) {
+      seg.push((i + 0.5) + ',' + (100 - b.rate));
+    } else if (seg.length) {
+      segments.push(seg); seg = [];
+    }
+  });
+  if (seg.length) segments.push(seg);
+  segments.forEach(pts => {
+    const poly = document.createElementNS(svgNS, 'polyline');
+    poly.setAttribute('points', pts.join(' '));
+    svg.appendChild(poly);
+  });
+  plot.appendChild(svg);
+
+  // 점 (div로 그려서 viewBox 비율 왜곡 회피)
+  const dotsLayer = el('div', { class: 'dots-layer' });
+  buckets.forEach((b, i) => {
+    if (b.created <= 0) return;
+    const left = ((i + 0.5) / N) * 100;
+    const top = 100 - b.rate;
+    const dot = el('div', {
+      class: 'dot',
+      style: 'left:' + left + '%; top:' + top + '%',
+      title: '달성률 ' + b.rate + '% (' + b.done + '/' + b.created + ')'
+    });
+    dotsLayer.appendChild(dot);
+  });
+  plot.appendChild(dotsLayer);
+
+  chart.appendChild(plot);
+
+  // x축 라벨
+  const xLabels = el('div', { class: 'chart-x-labels' });
+  buckets.forEach(b => xLabels.appendChild(el('div', { text: b.label })));
+  chart.appendChild(xLabels);
+
+  // 범례
+  const legend = el('div', { class: 'chart-legend' },
+    el('span', null,
+      el('i', { class: 'bar-swatch' }),
+      document.createTextNode('완료 건수')
+    ),
+    el('span', null,
+      el('i', { class: 'line-swatch' }),
+      document.createTextNode('달성률')
+    )
+  );
+  chart.appendChild(legend);
+
+  return chart;
+}
+
+function buildBuckets(bucketType, start, end, compIn, createdIn) {
   const buckets = [];
   if (bucketType === 'day7') {
     for (let i = 0; i < 7; i++) {
@@ -1528,32 +1849,52 @@ function buildBuckets(bucketType, start, end, compIn) {
       d.setDate(start.getDate() + i);
       const ds = d.getFullYear() + '-' + pad2(d.getMonth()+1) + '-' + pad2(d.getDate());
       const label = ['일','월','화','수','목','금','토'][d.getDay()];
-      buckets.push({ key: ds, label, value: 0 });
+      buckets.push({ key: ds, label, done: 0, created: 0, rate: 0 });
     }
     compIn.forEach(c => {
       const b = buckets.find(x => x.key === c.completed_date);
-      if (b) b.value++;
+      if (b) b.done++;
+    });
+    createdIn.forEach(x => {
+      const cd = new Date(x.created_at);
+      const ds = cd.getFullYear() + '-' + pad2(cd.getMonth()+1) + '-' + pad2(cd.getDate());
+      const b = buckets.find(z => z.key === ds);
+      if (b) b.created++;
     });
   } else if (bucketType === 'dayMonth') {
     const last = end.getDate();
     for (let i = 1; i <= last; i++) {
       const ds = start.getFullYear() + '-' + pad2(start.getMonth()+1) + '-' + pad2(i);
       const showLabel = (i === 1 || i % 5 === 0 || i === last) ? String(i) : '';
-      buckets.push({ key: ds, label: showLabel, value: 0 });
+      buckets.push({ key: ds, label: showLabel, done: 0, created: 0, rate: 0 });
     }
     compIn.forEach(c => {
       const b = buckets.find(x => x.key === c.completed_date);
-      if (b) b.value++;
+      if (b) b.done++;
+    });
+    createdIn.forEach(x => {
+      const cd = new Date(x.created_at);
+      const ds = cd.getFullYear() + '-' + pad2(cd.getMonth()+1) + '-' + pad2(cd.getDate());
+      const b = buckets.find(z => z.key === ds);
+      if (b) b.created++;
     });
   } else {
     for (let i = 0; i < 12; i++) {
-      buckets.push({ key: i, label: pad2(i+1), value: 0 });
+      buckets.push({ key: i, label: pad2(i+1), done: 0, created: 0, rate: 0 });
     }
     compIn.forEach(c => {
       const month = new Date(c.completed_at).getMonth();
-      buckets[month].value++;
+      buckets[month].done++;
+    });
+    createdIn.forEach(x => {
+      const month = new Date(x.created_at).getMonth();
+      buckets[month].created++;
     });
   }
+  buckets.forEach(b => {
+    b.rate = b.created > 0 ? Math.round(b.done / b.created * 100) : 0;
+    b.value = b.done; // 기존 호환
+  });
   return buckets;
 }
 
@@ -1585,6 +1926,7 @@ $('#addBacklogBtn').addEventListener('click', addBacklogFromInput);
 $('#backlogInput').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') addBacklogFromInput();
 });
+$('#resetDayBtn').addEventListener('click', resetDay);
 
 $$('.view-tab').forEach(b => {
   b.addEventListener('click', () => {
