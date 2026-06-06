@@ -272,9 +272,34 @@ input::placeholder { color: var(--text-3); }
   border-radius: 4px;
   display: flex; align-items: center; justify-content: center;
   transition: all 0.15s;
+  color: var(--bg-0);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
 }
 .todo-check:hover { border-color: var(--accent); }
-.todo-text { flex: 1; font-size: 15px; color: var(--text-0); word-break: break-word; }
+.todo-check.checked {
+  background: var(--accent);
+  border-color: var(--accent);
+  animation: check-pop 0.25s ease;
+}
+.todo-check.checked:hover { background: var(--accent); border-color: var(--accent); }
+@keyframes check-pop {
+  0% { transform: scale(0.7); }
+  60% { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+.todo-text { flex: 1; font-size: 15px; color: var(--text-0); word-break: break-word; transition: color 0.2s; }
+
+/* 완료된 todo (오늘 완료 - 다음날 자동 분리) */
+.todo-item.is-done { cursor: default; background: transparent; }
+.todo-item.is-done:hover { background: var(--bg-1); border-color: var(--border); }
+.todo-item.is-done .todo-text {
+  color: var(--text-3);
+  text-decoration: line-through;
+  text-decoration-color: var(--text-3);
+}
+.todo-item.is-done .todo-grip { visibility: hidden; }
 .todo-actions { display: flex; gap: 2px; flex-shrink: 0; }
 .todo-act {
   color: var(--text-3); padding: 4px 8px;
@@ -1038,7 +1063,16 @@ function renderTodoListByType(type, wrap) {
     .filter(t => (t.type || 'today') === type)
     .sort((a, b) => a.order - b.order);
 
-  if (!items.length) {
+  // 오늘 섹션에만: 오늘 날짜로 완료된 항목들을 체크 상태로 함께 표시
+  // (다음날 todayStr()이 바뀌면 자동으로 이 목록에서 빠지고 완료기록으로만 남음)
+  const today = todayStr();
+  const doneToday = type === 'today'
+    ? state.completed
+        .filter(c => c.completed_date === today)
+        .sort((a, b) => String(a.completed_at).localeCompare(String(b.completed_at)))
+    : [];
+
+  if (!items.length && !doneToday.length) {
     const msg = type === 'today'
       ? '— 오늘의 할 일이 비어있습니다 —'
       : '— 백로그가 비어있습니다 —';
@@ -1046,6 +1080,7 @@ function renderTodoListByType(type, wrap) {
     return;
   }
 
+  // 미완료 항목 먼저
   items.forEach(t => {
     const moveArrow = type === 'today' ? '↓' : '↑';
     const moveTitle = type === 'today' ? '백로그로 이동' : '오늘로 이동';
@@ -1079,6 +1114,24 @@ function renderTodoListByType(type, wrap) {
       )
     );
     if (editable) attachDrag(item, type);
+    wrap.appendChild(item);
+  });
+
+  // 오늘 완료된 항목 (체크 표시 상태)
+  doneToday.forEach(c => {
+    const item = el('div', {
+      class: 'todo-item is-done',
+      dataset: { id: c.id }
+    },
+      el('span', { class: 'todo-grip', text: '⋮⋮' }),
+      el('div', {
+        class: 'todo-check checked',
+        title: '오늘 완료됨',
+        text: '✓'
+      }),
+      el('div', { class: 'todo-text', text: c.text }),
+      el('div', { class: 'todo-actions' })
+    );
     wrap.appendChild(item);
   });
 }
