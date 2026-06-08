@@ -397,6 +397,20 @@ input::placeholder { color: var(--text-3); }
 }
 .cal-count .dot { width: 5px; height: 5px; background: var(--success); border-radius: 50%; }
 
+/* 달성률 (그날의 done / (done+missed)) */
+.cal-rate {
+  margin-top: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: right;
+  color: var(--text-3);
+  letter-spacing: -0.02em;
+}
+.cal-rate.high { color: var(--success); }
+.cal-rate.mid  { color: var(--accent); }
+.cal-rate.low  { color: var(--danger); }
+
 .day-detail {
   background: var(--bg-1); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 18px 20px; min-height: 80px;
@@ -475,6 +489,8 @@ input::placeholder { color: var(--text-3); }
   flex: 1; height: 100%;
   display: flex; align-items: flex-end;
   min-width: 0;
+  cursor: pointer;
+  position: relative;
 }
 .bar {
   width: 100%; background: var(--accent-dim);
@@ -482,6 +498,49 @@ input::placeholder { color: var(--text-3); }
   transition: background 0.15s; position: relative;
 }
 .bar:hover { background: var(--accent); }
+.bar-col.active .bar { background: var(--accent); }
+.bar-col.active .bar-val { color: var(--accent); font-weight: 700; }
+
+/* hover/click 시 막대 위로 뜨는 툴팁 */
+.chart-tooltip {
+  position: absolute;
+  background: var(--bg-3);
+  border: 1px solid var(--border-strong);
+  color: var(--text-0);
+  padding: 8px 11px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.55);
+  z-index: 30;
+  transform: translate(-50%, -100%);
+  margin-top: -8px;
+  min-width: 120px;
+  display: none;
+}
+.chart-tooltip-label {
+  color: var(--accent);
+  font-weight: 700;
+  margin-bottom: 6px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border);
+  text-align: center;
+  font-size: 11px;
+}
+.chart-tooltip-row {
+  display: flex; justify-content: space-between; gap: 16px;
+  color: var(--text-2);
+  font-size: 11px;
+}
+.chart-tooltip-row .v {
+  color: var(--text-0);
+  font-weight: 600;
+}
+.chart-tooltip-row .v.rate-high { color: var(--success); }
+.chart-tooltip-row .v.rate-low  { color: var(--danger); }
 .bar-val {
   font-family: var(--font-mono); font-size: 9px; color: var(--text-2);
   position: absolute; top: -14px; left: 50%; transform: translateX(-50%); white-space: nowrap;
@@ -574,6 +633,8 @@ input::placeholder { color: var(--text-3); }
   .cal-cell { min-height: 44px; padding: 4px; }
   .cal-date { font-size: 11px; }
   .cal-count { font-size: 10px; }
+  .cal-rate { font-size: 10px; }
+  .chart-tooltip { font-size: 10px; min-width: 100px; padding: 6px 9px; }
   .me-name { max-width: 100px; }
 }
 </style>
@@ -1700,10 +1761,13 @@ function renderCalendar() {
   const y = state.calYear, m = state.calMonth;
   $('#calendarTitle').textContent = y + '.' + pad2(m + 1);
 
-  const countByDate = {};
+  // 그날별 done/missed 집계
+  const statByDate = {};
   state.completed.forEach(c => {
-    if (c.status === 'missed') return;
-    countByDate[c.completed_date] = (countByDate[c.completed_date] || 0) + 1;
+    const ds = c.completed_date;
+    if (!statByDate[ds]) statByDate[ds] = { done: 0, missed: 0 };
+    if (c.status === 'missed') statByDate[ds].missed++;
+    else statByDate[ds].done++;
   });
 
   const grid = $('#calendarGrid');
@@ -1724,20 +1788,34 @@ function renderCalendar() {
   }
   for (let d = 1; d <= lastDate; d++) {
     const ds = y + '-' + pad2(m + 1) + '-' + pad2(d);
-    const cnt = countByDate[ds] || 0;
+    const stat = statByDate[ds];
+    const total = stat ? (stat.done + stat.missed) : 0;
+    const rate = total > 0 ? Math.round(stat.done / total * 100) : 0;
+
     const classes = ['cal-cell'];
     if (ds === today) classes.push('today');
     if (ds === state.calSelected) classes.push('selected');
+
+    let rateNode = null;
+    if (total > 0) {
+      let rateCls = 'cal-rate';
+      if (rate >= 80) rateCls += ' high';
+      else if (rate >= 50) rateCls += ' mid';
+      else rateCls += ' low';
+      rateNode = el('div', {
+        class: rateCls,
+        text: rate + '%',
+        title: '완료 ' + stat.done + ' / 미완료 ' + stat.missed + ' (달성률 ' + rate + '%)'
+      });
+    }
+
     const cell = el('div', {
       class: classes.join(' '),
       dataset: { date: ds },
       onclick: () => selectDay(ds)
     },
       el('div', { class: 'cal-date', text: String(d) }),
-      cnt > 0 ? el('div', { class: 'cal-count' },
-        el('span', { class: 'dot' }),
-        String(cnt)
-      ) : null
+      rateNode
     );
     grid.appendChild(cell);
   }
@@ -1758,6 +1836,8 @@ function selectDay(ds) {
 
   const doneCount = items.filter(c => c.status !== 'missed').length;
   const missedCount = items.filter(c => c.status === 'missed').length;
+  const totalCount = doneCount + missedCount;
+  const rate = totalCount > 0 ? Math.round(doneCount / totalCount * 100) : 0;
 
   const detail = $('#dayDetail');
   detail.innerHTML = '';
@@ -1768,6 +1848,9 @@ function selectDay(ds) {
   ];
   if (missedCount > 0) {
     titleChildren.push(document.createTextNode(' · 미완료 ' + missedCount + '건'));
+  }
+  if (totalCount > 0) {
+    titleChildren.push(document.createTextNode(' · 달성률 ' + rate + '%'));
   }
   detail.appendChild(el('div', { class: 'day-detail-title' }, titleChildren));
 
@@ -1903,6 +1986,54 @@ function renderComboChart(buckets) {
   const chart = el('div', { class: 'bar-chart' });
   const plot = el('div', { class: 'chart-plot' });
 
+  // 툴팁 (한 차트에 하나, 막대 hover/click 시 위치/내용 변경)
+  const tooltip = el('div', { class: 'chart-tooltip' });
+
+  function showTooltip(b, colEl) {
+    const undone = Math.max(0, (b.created || 0) - b.done);
+    const rateCls = b.rate >= 80 ? 'rate-high' : (b.rate < 50 ? 'rate-low' : '');
+
+    tooltip.innerHTML = '';
+    tooltip.appendChild(el('div', { class: 'chart-tooltip-label', text: b.label || String(b.key) }));
+    tooltip.appendChild(el('div', { class: 'chart-tooltip-row' },
+      el('span', { text: '완료' }),
+      el('span', { class: 'v', text: b.done + '건' })
+    ));
+    tooltip.appendChild(el('div', { class: 'chart-tooltip-row' },
+      el('span', { text: '미완료' }),
+      el('span', { class: 'v', text: undone + '건' })
+    ));
+    tooltip.appendChild(el('div', { class: 'chart-tooltip-row' },
+      el('span', { text: '달성률' }),
+      el('span', { class: 'v ' + rateCls, text: ((b.created || 0) > 0 ? b.rate + '%' : '—') })
+    ));
+
+    // 활성 표시
+    plot.querySelectorAll('.bar-col.active').forEach(e => e.classList.remove('active'));
+    colEl.classList.add('active');
+
+    // 위치 계산: 막대 중심 x
+    const plotRect = plot.getBoundingClientRect();
+    const colRect = colEl.getBoundingClientRect();
+    let x = colRect.left - plotRect.left + colRect.width / 2;
+
+    tooltip.style.display = 'block';
+    tooltip.style.left = x + 'px';
+    tooltip.style.top = '0px'; // plot 상단 기준 위로 솟음
+
+    // 좌우 가장자리 보정
+    const tipRect = tooltip.getBoundingClientRect();
+    const halfW = tipRect.width / 2;
+    if (x - halfW < 4) x = halfW + 4;
+    if (x + halfW > plotRect.width - 4) x = plotRect.width - halfW - 4;
+    tooltip.style.left = x + 'px';
+  }
+
+  function hideTooltip() {
+    tooltip.style.display = 'none';
+    plot.querySelectorAll('.bar-col.active').forEach(e => e.classList.remove('active'));
+  }
+
   // 막대
   const barsRow = el('div', { class: 'chart-bars' });
   buckets.forEach(b => {
@@ -1912,9 +2043,23 @@ function renderComboChart(buckets) {
         b.done > 0 ? el('span', { class: 'bar-val', text: String(b.done) }) : null
       )
     );
+    col.addEventListener('mouseenter', () => showTooltip(b, col));
+    col.addEventListener('mouseleave', hideTooltip);
+    col.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // 모바일 탭: 같은 막대 다시 누르면 닫기
+      if (col.classList.contains('active') && tooltip.style.display === 'block') {
+        hideTooltip();
+      } else {
+        showTooltip(b, col);
+      }
+    });
     barsRow.appendChild(col);
   });
   plot.appendChild(barsRow);
+
+  // plot 빈 영역 클릭 → 툴팁 닫기 (외부 리스너 leak 없이)
+  plot.addEventListener('click', hideTooltip);
 
   // 꺾은선 SVG — created>0 인 구간만 연결, 끊긴 구간은 별도 segment
   const svgNS = 'http://www.w3.org/2000/svg';
@@ -1954,6 +2099,9 @@ function renderComboChart(buckets) {
     dotsLayer.appendChild(dot);
   });
   plot.appendChild(dotsLayer);
+
+  // 툴팁 (가장 위, z-index)
+  plot.appendChild(tooltip);
 
   chart.appendChild(plot);
 
