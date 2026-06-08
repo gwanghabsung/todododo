@@ -1098,11 +1098,16 @@ async function boot() {
   }
 }
 
-async function loadUserAll() {
-  if (!state.currentUser) return;
+// loadUserAll 동시성 가드 - 늦게 도착한 fetch 응답이 현재 화면 덮어쓰는 것 방지
+let _loadToken = 0;
 
-  // 1. 캐시 즉시 표시 (있으면 화면 깜빡임 없이 바로 렌더)
-  const cached = dataCache.get(state.currentUser);
+async function loadUserAll() {
+  const targetUser = state.currentUser;
+  if (!targetUser) return;
+  const myToken = ++_loadToken;
+
+  // 1. 캐시 즉시 표시 (동기 - race 위험 없음)
+  const cached = dataCache.get(targetUser);
   let hasCached = false;
   if (cached) {
     state.todos = cached.todos || [];
@@ -1110,30 +1115,43 @@ async function loadUserAll() {
     state.completed = cached.completed || [];
     hasCached = true;
     renderAll();
+  } else {
+    // 캐시 없으면 빈 상태로 즉시 (이전 사용자 데이터 잔존 방지)
+    state.todos = [];
+    state.shortcuts = [];
+    state.completed = [];
+    renderAll();
   }
 
   // 2. 백그라운드에서 최신 데이터 가져와 갱신
   try {
     const [ud, completed] = await Promise.all([
-      api('getUserData', { user: state.currentUser }),
-      api('getCompleted', { user: state.currentUser })
+      api('getUserData', { user: targetUser }),
+      api('getCompleted', { user: targetUser })
     ]);
+    // Race 가드: 더 새로운 요청이 있었거나 사용자 탭이 바뀌었으면 응답 폐기
+    if (myToken !== _loadToken) return;
+    if (state.currentUser !== targetUser) return;
+
     state.todos = ud.todos || [];
     state.shortcuts = ud.shortcuts || [];
     state.completed = completed || [];
-    dataCache.set(state.currentUser, {
+    // 캐시는 fetch 당시 user 키로 저장 (state.currentUser 안 씀)
+    dataCache.set(targetUser, {
       todos: state.todos,
       shortcuts: state.shortcuts,
       completed: state.completed
     });
     renderAll();
   } catch (e) {
+    if (myToken !== _loadToken) return;
+    if (state.currentUser !== targetUser) return;
     if (!hasCached) {
       showToast('데이터 로드 실패', true);
     }
     // 캐시가 있었으면 그대로 유지 (오프라인 모드)
   }
-  refreshBrand();
+  if (myToken === _loadToken) refreshBrand();
 }
 
 // ═════════════════════════════════════════════
@@ -1217,12 +1235,15 @@ function renderUserTabs() {
 
 async function switchUser(name) {
   if (name === state.currentUser) return;
-  if (queue.size() > 0 && auth.isValid()) await queue.flush();
+  // 큐 flush는 fire-and-forget (탭 전환을 막지 않음)
+  // 큐에는 본인 작업만 들어있고 다른 user의 데이터 fetch와는 무관.
+  if (queue.size() > 0 && auth.isValid()) queue.flush();
   state.currentUser = name;
   localStorage.setItem('todo_last_user', name);
   renderUserTabs();
   renderRoBanner();
-  await loadUserAll();
+  // loadUserAll 안에서 캐시 즉시 표시 → 백그라운드 갱신
+  loadUserAll();
 }
 
 async function claimMePrompt() {
@@ -1397,9 +1418,23 @@ function maxOrderOf(type) {
   return m;
 }
 
+// 빠른 더블 클릭/엔터/터치 중복으로 인한 같은 항목 중복 추가 방지
+//  - 동일 (user, text, type) 조합이 1초 이내 다시 들어오면 무시
+//  - 1초 후엔 사용자가 의도적으로 같은 항목 다시 추가 가능
+let _lastAdd = { key: '', t: 0 };
+
 function addTodoCore(text, type) {
   if (!guard()) return;
   if (!text || !state.currentUser) return;
+
+  const key = state.currentUser + '|' + type + '|' + text;
+  const now = Date.now();
+  if (_lastAdd.key === key && (now - _lastAdd.t) < 1000) {
+    console.warn('[addTodo] duplicate suppressed:', text);
+    return;
+  }
+  _lastAdd = { key: key, t: now };
+
   const id = newId();
   const order = maxOrderOf(type) + 1;
   const created_at = nowISO();
