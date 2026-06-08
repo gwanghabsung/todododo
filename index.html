@@ -323,7 +323,7 @@ input::placeholder { color: var(--text-3); }
 .view.readonly .reset-day-row { display: none !important; }
 
 /* reset day button */
-.reset-day-row { margin-top: 14px; display: flex; justify-content: flex-end; }
+.reset-day-row { margin-top: 14px; display: flex; justify-content: flex-end; gap: 8px; }
 .reset-day-btn {
   padding: 7px 14px;
   background: transparent;
@@ -629,6 +629,7 @@ input::placeholder { color: var(--text-3); }
         <div class="todos" id="todosList"></div>
 
         <div class="reset-day-row">
+          <button id="copyTodayBtn" class="reset-day-btn" title="오늘 완료/미완료 항목을 텍스트로 복사합니다">⧉ 결과 복사</button>
           <button id="resetDayBtn" class="reset-day-btn" title="오늘의 미완료 항목들을 어제 날짜로 미완료 처리합니다">↺ 하루 초기화</button>
         </div>
       </div>
@@ -875,6 +876,17 @@ const el = (tag, attrs, ...children) => {
 function pad2(n) { return String(n).padStart(2, '0'); }
 function todayStr() {
   const d = new Date();
+  return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+}
+// 새벽 6시 기준 "활동일" 문자열
+//  - 06:00 ~ 23:59 → 오늘
+//  - 00:00 ~ 05:59 → 어제 (아직 전날 활동의 연장으로 본다)
+// 자정 직전/직후에 하루 초기화를 눌러도 동일한 날짜로 기록되도록 함.
+function activeDayStr() {
+  const d = new Date();
+  if (d.getHours() < 6) {
+    d.setDate(d.getDate() - 1);
+  }
   return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
 }
 function nowISO() { return new Date().toISOString(); }
@@ -1444,6 +1456,94 @@ function completeTodo(id) {
   queue.push('completeTodo', { id, completed_at, completed_date, status: 'done' });
 }
 
+// 오늘 결과(완료/미완료) 텍스트 복사
+function copyToday() {
+  if (!state.currentUser) {
+    showToast('사용자를 먼저 선택하세요', true);
+    return;
+  }
+  const date = activeDayStr(); // 6시 cutoff 기준 활동일
+
+  // 요일 계산
+  const d = new Date(date + 'T00:00:00');
+  const weekday = ['일','월','화','수','목','금','토'][d.getDay()];
+  const displayDate = (d.getMonth() + 1) + '/' + d.getDate() + ' (' + weekday + ')';
+
+  // 오늘 완료 항목 (완료 시각 순)
+  const doneItems = state.completed
+    .filter(c => c.completed_date === date && c.status === 'done')
+    .sort((a, b) => {
+      const ta = new Date(a.completed_at).getTime() || 0;
+      const tb = new Date(b.completed_at).getTime() || 0;
+      return ta - tb;
+    })
+    .map(c => c.text);
+
+  // 오늘 미완료 항목 (오늘 할일로 분류된 것, 정렬 순서대로)
+  const undoneItems = state.todos
+    .filter(t => (t.type || 'today') === 'today')
+    .sort((a, b) => (a.order || 0) - (b.order || 0))
+    .map(t => t.text);
+
+  if (!doneItems.length && !undoneItems.length) {
+    showToast('오늘 항목이 없습니다');
+    return;
+  }
+
+  const lines = [];
+  lines.push('📅 ' + displayDate + ' ' + state.currentUser);
+  lines.push('');
+  lines.push('✅ 완료 (' + doneItems.length + ')');
+  if (doneItems.length) {
+    doneItems.forEach(t => lines.push('• ' + t));
+  } else {
+    lines.push('• (없음)');
+  }
+  lines.push('');
+  lines.push('⏳ 미완료 (' + undoneItems.length + ')');
+  if (undoneItems.length) {
+    undoneItems.forEach(t => lines.push('• ' + t));
+  } else {
+    lines.push('• (없음)');
+  }
+
+  const text = lines.join('\n');
+
+  copyToClipboard(text).then(() => {
+    showToast('복사됨 (완료 ' + doneItems.length + ' / 미완료 ' + undoneItems.length + ')');
+  }).catch(() => {
+    showToast('복사 실패', true);
+  });
+}
+
+// 클립보드 복사 (모던 API + fallback)
+function copyToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText && window.isSecureContext) {
+    return navigator.clipboard.writeText(text);
+  }
+  return new Promise((resolve, reject) => {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.top = '0';
+      ta.style.left = '0';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      ta.setSelectionRange(0, text.length);
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      if (ok) resolve();
+      else reject(new Error('execCommand copy failed'));
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 function resetDay() {
   if (!guard()) return;
   const todayItems = state.todos.filter(t => (t.type || 'today') === 'today');
@@ -1451,27 +1551,29 @@ function resetDay() {
     showToast('오늘 미완료 항목이 없습니다');
     return;
   }
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yDateStr = yesterday.getFullYear() + '-' + pad2(yesterday.getMonth()+1) + '-' + pad2(yesterday.getDate());
+  // 6시 cutoff 기준 "현재 활동일"에 미완료로 기록
+  //  - 23:30 에 누르면 → 오늘 활동일 (예: 6/9)
+  //  - 02:00 에 누르면 → 직전 활동일 (예: 6/9, 아직 새벽이라 같은 활동일)
+  //  - 07:00 에 누르면 → 오늘 활동일 (이 시점엔 보통 자동처리로 todos 비어있음)
+  const recordDateStr = activeDayStr();
 
-  if (!confirm(todayItems.length + '개의 미완료 항목을 ' + yDateStr + ' 미완료로 기록하고 오늘 목록을 비웁니다. 계속할까요?')) return;
+  if (!confirm(todayItems.length + '개의 미완료 항목을 ' + recordDateStr + ' 미완료로 기록하고 오늘 목록을 비웁니다. 계속할까요?')) return;
 
   const completed_at = nowISO();
   todayItems.forEach(t => {
     state.completed.push({
       id: t.id, user: t.user, text: t.text,
-      completed_date: yDateStr, completed_at,
+      completed_date: recordDateStr, completed_at,
       created_at: t.created_at, status: 'missed'
     });
     queue.push('completeTodo', {
-      id: t.id, completed_at, completed_date: yDateStr, status: 'missed'
+      id: t.id, completed_at, completed_date: recordDateStr, status: 'missed'
     });
   });
   state.todos = state.todos.filter(t => (t.type || 'today') !== 'today');
 
   renderAll();
-  showToast(todayItems.length + '개 항목 → ' + yDateStr + ' 미완료 처리됨');
+  showToast(todayItems.length + '개 항목 → ' + recordDateStr + ' 미완료 처리됨');
 }
 
 function moveTodo(id, targetType) {
@@ -1899,21 +2001,63 @@ function buildBuckets(bucketType, start, end, compIn, createdIn) {
 }
 
 // ═════════════════════════════════════════════
-// Auth expiry check
+// Auth: silent refresh (토큰 만료 전 자동 재발급)
+// ─────────────────────────────────────────────
+// Google ID Token 은 발급 시점부터 1시간 후 만료(Google 강제).
+// auto_select: true 설정 덕분에 prompt() 호출 시
+// 사용자가 Google 에 로그인된 상태면 UI 없이 새 토큰을 받아옴.
+// → 만료 5분 전부터 미리 갱신해서 사실상 끊김 없는 세션 유지.
 // ═════════════════════════════════════════════
+let _refreshInFlight = false;
+
+function refreshTokenIfNeeded(force) {
+  if (_refreshInFlight) return;
+  if (!auth.idToken) return;
+  const msLeft = auth.exp * 1000 - Date.now();
+  // 만료 5분 전부터 갱신, 또는 force=true
+  if (!force && msLeft > 5 * 60 * 1000) return;
+  if (!window.google || !google.accounts || !google.accounts.id) return;
+
+  _refreshInFlight = true;
+  try {
+    // initGIS()가 안 됐다면 한 번 더 (안전장치)
+    initGIS();
+    // auto_select: true 덕분에 사용자 인터랙션 없이 새 credential 발급 시도
+    google.accounts.id.prompt();
+  } catch (e) {
+    console.warn('[auth refresh] prompt failed', e);
+  }
+  // 30초 락 (콜백 후 자동 풀림)
+  setTimeout(() => { _refreshInFlight = false; }, 30000);
+}
+
+// 새 토큰을 받으면 락 즉시 해제
+const _origHandleCred = window.handleCredentialResponse;
+window.handleCredentialResponse = function(response) {
+  _refreshInFlight = false;
+  _origHandleCred(response);
+};
+
+// 1분마다 토큰 상태 체크
 setInterval(() => {
-  if (auth.idToken && Date.now() >= auth.exp * 1000) {
+  if (!auth.idToken) return;
+
+  // 만료 임박 → silent refresh
+  refreshTokenIfNeeded();
+
+  // 그래도 만료됐다면 (refresh 실패 케이스)
+  if (Date.now() >= auth.exp * 1000) {
     auth.clear();
     renderAuthArea();
     renderUserTabs();
     renderRoBanner();
     renderAll();
-    showToast('세션이 만료되어 로그아웃되었습니다', true);
+    showToast('세션이 만료되었습니다. 다시 로그인해 주세요.', true);
     if (window.google && google.accounts && google.accounts.id) {
       google.accounts.id.prompt();
     }
   }
-}, 30000);
+}, 60 * 1000);
 
 // ═════════════════════════════════════════════
 // Events
@@ -1927,6 +2071,36 @@ $('#backlogInput').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') addBacklogFromInput();
 });
 $('#resetDayBtn').addEventListener('click', resetDay);
+$('#copyTodayBtn').addEventListener('click', copyToday);
+
+// 활동일 변경 자동 감지
+//  - 새벽 6시 정각에 서버 트리거가 todos를 missed 처리하므로
+//    페이지가 켜져 있을 때 클라이언트 상태가 stale 해질 수 있음.
+//  - 1분마다 활동일이 바뀌었는지 체크 → 바뀌면 데이터 새로고침.
+let _lastActiveDay = activeDayStr();
+setInterval(() => {
+  const now = activeDayStr();
+  if (now !== _lastActiveDay) {
+    _lastActiveDay = now;
+    if (state.currentUser && auth.isValid()) {
+      console.log('[activeDay] changed → reload', now);
+      loadUserAll();
+    }
+  }
+}, 60 * 1000);
+
+// 탭 다시 활성화 시에도 한 번 체크
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  // 1) 토큰 만료 임박이면 즉시 갱신 시도
+  refreshTokenIfNeeded();
+  // 2) 활동일 변경 체크
+  const now = activeDayStr();
+  if (now !== _lastActiveDay) {
+    _lastActiveDay = now;
+    if (state.currentUser && auth.isValid()) loadUserAll();
+  }
+});
 
 $$('.view-tab').forEach(b => {
   b.addEventListener('click', () => {
