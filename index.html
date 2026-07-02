@@ -8,7 +8,6 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/[email protected]/dist/web/variable/pretendardvariable.css" />
-<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 /* tokens */
 :root {
@@ -737,11 +736,9 @@ input::placeholder { color: var(--text-3); }
 // CONFIG — 본인 값으로 교체
 // ═════════════════════════════════════════════
 const API_URL = 'https://script.google.com/macros/s/AKfycbyxvFZKtBT8gz4jni7b-xZ0oBvX21jBXhwhOTsKW_PgQYFWsjwUmfw-13zAuoUDPa4J/exec';
-const GOOGLE_CLIENT_ID = '1077038002206-30kme3htm5kkajnm3idltq8kv09als0k.apps.googleusercontent.com';
 
 const FLUSH_DEBOUNCE_MS = 1500;
 const QUEUE_STORAGE_KEY = 'todo_queue_v3';
-const AUTH_STORAGE_KEY = 'todo_auth_v3';
 const DATA_CACHE_PREFIX = 'todo_data_v1_';
 const USERS_CACHE_KEY = 'todo_users_v1';
 
@@ -803,114 +800,6 @@ function saveCurrentToCache() {
     shortcuts: state.shortcuts,
     completed: state.completed
   });
-}
-
-// ═════════════════════════════════════════════
-// Auth
-// ═════════════════════════════════════════════
-const auth = {
-  idToken: null, email: null, name: null, picture: null, exp: 0,
-  load() {
-    try {
-      const data = JSON.parse(localStorage.getItem(AUTH_STORAGE_KEY) || 'null');
-      if (!data) return;
-      if (Date.now() >= Number(data.exp) * 1000) {
-        localStorage.removeItem(AUTH_STORAGE_KEY);
-        return;
-      }
-      Object.assign(this, data);
-    } catch (e) {}
-  },
-  save() {
-    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify({
-      idToken: this.idToken, email: this.email,
-      name: this.name, picture: this.picture, exp: this.exp
-    }));
-  },
-  setFromToken(idToken) {
-    const payload = decodeJWT(idToken);
-    if (!payload) return false;
-    this.idToken = idToken;
-    this.email = String(payload.email || '').toLowerCase();
-    this.name = payload.name || payload.email || '';
-    this.picture = payload.picture || '';
-    this.exp = Number(payload.exp) || 0;
-    this.save();
-    return true;
-  },
-  isValid() {
-    return !!(this.idToken && this.email && Date.now() < this.exp * 1000);
-  },
-  clear() {
-    this.idToken = null; this.email = null; this.name = null;
-    this.picture = null; this.exp = 0;
-    localStorage.removeItem(AUTH_STORAGE_KEY);
-  }
-};
-
-function decodeJWT(token) {
-  try {
-    const b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
-    const pad = '='.repeat((4 - b64.length % 4) % 4);
-    const bin = atob(b64 + pad);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return JSON.parse(new TextDecoder('utf-8').decode(bytes));
-  } catch (e) { return null; }
-}
-
-// GIS 콜백 (스크립트 로드 후 호출)
-function handleCredentialResponse(response) {
-  if (!response || !response.credential) return;
-  if (!auth.setFromToken(response.credential)) return;
-  showToast('로그인됨: ' + auth.email);
-  // 본인 user 자동 활성화
-  const me = state.users.find(u => u.email === auth.email);
-  if (me) {
-    state.currentUser = me.name;
-    localStorage.setItem('todo_last_user', me.name);
-    loadUserAll();
-  } else {
-    // 본인 등록 안 됨 → 그대로 두고 등록 안내 노출
-  }
-  renderAuthArea();
-  renderUserTabs();
-  renderRoBanner();
-  renderAll();
-}
-
-window.handleCredentialResponse = handleCredentialResponse;
-
-function initGIS() {
-  if (!window.google || !google.accounts || !google.accounts.id) return false;
-  if (GOOGLE_CLIENT_ID.includes('여기에')) return false;
-  google.accounts.id.initialize({
-    client_id: GOOGLE_CLIENT_ID,
-    callback: handleCredentialResponse,
-    auto_select: true,
-    cancel_on_tap_outside: false
-  });
-  return true;
-}
-
-function promptSignIn() {
-  if (!initGIS()) {
-    showToast('Google 로그인 라이브러리 로드 중...', true);
-    return;
-  }
-  google.accounts.id.prompt();
-}
-
-function logout() {
-  auth.clear();
-  if (window.google && google.accounts && google.accounts.id) {
-    google.accounts.id.disableAutoSelect();
-  }
-  renderAuthArea();
-  renderUserTabs();
-  renderRoBanner();
-  renderAll();
-  showToast('로그아웃됨');
 }
 
 // ═════════════════════════════════════════════
@@ -996,15 +885,9 @@ function emailForUser(name) {
   const u = state.users.find(x => x.name === name);
   return u ? (u.email || '') : '';
 }
+// Auth 제거 후: 현재 선택된 탭이면 항상 편집 가능
 function canEditCurrentTab() {
-  if (!auth.isValid()) return false;
-  if (!state.currentUser) return false;
-  const e = emailForUser(state.currentUser);
-  return e && e === auth.email;
-}
-function myUser() {
-  if (!auth.isValid()) return null;
-  return state.users.find(u => u.email === auth.email) || null;
+  return !!state.currentUser;
 }
 
 // ═════════════════════════════════════════════
@@ -1012,7 +895,6 @@ function myUser() {
 // ═════════════════════════════════════════════
 async function api(action, params) {
   const body = Object.assign({ action: action }, params || {});
-  if (auth.isValid()) body.idToken = auth.idToken;
   const res = await fetch(API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -1044,10 +926,6 @@ const queue = {
   async flush() {
     if (this.flushing) return;
     if (this.ops.length === 0) return;
-    if (!auth.isValid()) {
-      // 인증 만료/없음 → 큐 유지, 로그인 시 재시도
-      return;
-    }
     this.flushing = true;
     refreshBrand();
     const sending = this.ops.slice();
@@ -1086,8 +964,8 @@ const queue = {
   beacon() {
     // 페이지 떠날 때 마지막 시도. 응답을 못 받으니 큐는 비우지 않고
     // 다음 세션의 boot()에서 다시 flush. 백엔드가 LockService + idempotent라 중복 안 됨.
-    if (this.ops.length === 0 || !auth.isValid()) return;
-    const body = JSON.stringify({ action: 'batch', ops: this.ops, idToken: auth.idToken });
+    if (this.ops.length === 0) return;
+    const body = JSON.stringify({ action: 'batch', ops: this.ops });
     try {
       const blob = new Blob([body], { type: 'text/plain;charset=utf-8' });
       navigator.sendBeacon(API_URL, blob);
@@ -1105,10 +983,8 @@ function scheduleFlush(delay) {
 // Bootstrap
 // ═════════════════════════════════════════════
 async function boot() {
-  auth.load();
   queue.load();
   refreshBrand();
-  renderAuthArea();
 
   if (API_URL.includes('여기에')) {
     $('#brandSub').textContent = '— CONFIG REQUIRED';
@@ -1120,24 +996,18 @@ async function boot() {
   const cachedUsers = usersCache.get();
   if (cachedUsers && cachedUsers.length) {
     state.users = cachedUsers;
-    renderAuthArea();
     renderUserTabs();
-    renderRoBanner();
 
-    // 가능하면 현재 유저 정해서 캐시 데이터 즉시 렌더
-    const me = myUser();
-    if (me) {
-      state.currentUser = me.name;
-    } else {
-      const last = localStorage.getItem('todo_last_user');
-      const found = state.users.find(u => u.name === last);
-      state.currentUser = (found && found.name) || state.users[0].name;
-    }
+    // 마지막 선택 유저 → 첫번째 순으로 결정
+    const last = localStorage.getItem('todo_last_user');
+    const found = state.users.find(u => u.name === last);
+    state.currentUser = (found && found.name) || state.users[0].name;
+
     const userCache = dataCache.get(state.currentUser);
     if (userCache) {
-      state.todos = userCache.todos || [];
-      state.shortcuts = userCache.shortcuts || [];
-      state.completed = userCache.completed || [];
+      state.todos = Array.isArray(userCache.todos) ? userCache.todos : [];
+      state.shortcuts = Array.isArray(userCache.shortcuts) ? userCache.shortcuts : [];
+      state.completed = Array.isArray(userCache.completed) ? userCache.completed : [];
       renderUserTabs();
       renderAll();
     }
@@ -1146,29 +1016,22 @@ async function boot() {
   $('#brandSub').textContent = '— CONNECTING';
 
   try {
-    if (queue.size() > 0 && auth.isValid()) await queue.flush();
+    if (queue.size() > 0) await queue.flush();
 
     // 2. 최신 users 가져오기
     state.users = await api('getAllUsers');
     usersCache.set(state.users);
-    renderAuthArea();
     renderUserTabs();
-    renderRoBanner();
 
     if (!state.users.length) {
       $('#brandSub').textContent = '— NO USERS';
       return;
     }
-    // 자동 user 선택: 본인 우선 → 마지막 선택 → 첫번째
-    const me = myUser();
-    if (me) {
-      state.currentUser = me.name;
-      localStorage.setItem('todo_last_user', me.name);
-    } else {
-      const last = localStorage.getItem('todo_last_user');
-      const found = state.users.find(u => u.name === last);
-      state.currentUser = (found && found.name) || state.users[0].name;
-    }
+    // 마지막 선택 → 첫번째
+    const last = localStorage.getItem('todo_last_user');
+    const found = state.users.find(u => u.name === last);
+    state.currentUser = (found && found.name) || state.users[0].name;
+    localStorage.setItem('todo_last_user', state.currentUser);
     renderUserTabs();
     await loadUserAll();
   } catch (e) {
@@ -1307,53 +1170,19 @@ async function loadUserAll() {
 }
 
 // ═════════════════════════════════════════════
-// Render: auth area
+// Render: auth area (Auth 제거됨 — 빈 함수로 남김, 호출부 안전)
 // ═════════════════════════════════════════════
 function renderAuthArea() {
   const wrap = $('#authArea');
-  wrap.innerHTML = '';
-  if (auth.isValid()) {
-    const me = el('div', { class: 'me' },
-      auth.picture
-        ? el('img', { class: 'me-pic', src: auth.picture, referrerpolicy: 'no-referrer' })
-        : el('div', { class: 'me-pic', style: 'background:var(--bg-3);' }),
-      el('span', { class: 'me-name', text: auth.name || auth.email }),
-      el('button', { class: 'me-logout', text: '×', title: '로그아웃', onclick: logout })
-    );
-    wrap.appendChild(me);
-  } else {
-    wrap.appendChild(el('button', {
-      class: 'signin-btn',
-      text: 'Google 로그인',
-      onclick: promptSignIn
-    }));
-  }
+  if (wrap) wrap.innerHTML = '';
 }
 
 // ═════════════════════════════════════════════
-// Render: read-only banner
+// Render: read-only banner (Auth 제거됨 — 빈 함수)
 // ═════════════════════════════════════════════
 function renderRoBanner() {
   const wrap = $('#roBanner');
-  wrap.innerHTML = '';
-  if (canEditCurrentTab()) return;
-
-  if (!auth.isValid()) {
-    wrap.appendChild(el('div', { class: 'ro-banner signin-needed' },
-      el('span', { text: '보기 모드 · 수정하려면 Google 로그인이 필요합니다' })
-    ));
-  } else if (state.currentUser) {
-    const ownerEmail = emailForUser(state.currentUser);
-    if (!ownerEmail) {
-      wrap.appendChild(el('div', { class: 'ro-banner' },
-        el('span', { text: state.currentUser + ' · 이메일 매핑이 없어 수정할 수 없습니다 (Users 시트 확인)' })
-      ));
-    } else {
-      wrap.appendChild(el('div', { class: 'ro-banner' },
-        el('span', { text: state.currentUser + '의 탭 · 본인 데이터만 수정 가능합니다' })
-      ));
-    }
-  }
+  if (wrap) wrap.innerHTML = '';
 }
 
 // ═════════════════════════════════════════════
@@ -1362,59 +1191,47 @@ function renderRoBanner() {
 function renderUserTabs() {
   const wrap = $('#userTabs');
   wrap.innerHTML = '';
-  const meEmail = auth.isValid() ? auth.email : null;
   state.users.forEach(u => {
     const classes = ['user-tab'];
     if (u.name === state.currentUser) classes.push('active');
-    if (meEmail && u.email === meEmail) classes.push('is-me');
     wrap.appendChild(el('button', {
       class: classes.join(' '),
       text: u.name,
-      title: u.email ? u.email : '이메일 미매핑',
       onclick: () => switchUser(u.name)
     }));
   });
-  // 본인이 아직 등록 안 된 경우: 본인 등록 버튼
-  if (auth.isValid() && !myUser()) {
-    wrap.appendChild(el('button', {
-      class: 'user-tab user-tab-claim',
-      text: '+ 본인 등록',
-      title: '내 Google 계정을 사용자로 등록',
-      onclick: claimMePrompt
-    }));
-  }
+  // 신규 사용자 추가 버튼
+  wrap.appendChild(el('button', {
+    class: 'user-tab user-tab-claim',
+    text: '+ 사용자 추가',
+    title: '새 사용자 등록',
+    onclick: addUserPrompt
+  }));
 }
 
 async function switchUser(name) {
   if (name === state.currentUser) return;
   // 큐 flush는 fire-and-forget (탭 전환을 막지 않음)
-  // 큐에는 본인 작업만 들어있고 다른 user의 데이터 fetch와는 무관.
-  if (queue.size() > 0 && auth.isValid()) queue.flush();
+  if (queue.size() > 0) queue.flush();
   state.currentUser = name;
   localStorage.setItem('todo_last_user', name);
   renderUserTabs();
-  renderRoBanner();
   // loadUserAll 안에서 캐시 즉시 표시 → 백그라운드 갱신
   loadUserAll();
 }
 
-async function claimMePrompt() {
-  if (!auth.isValid()) return;
-  const existing = state.users.find(u => !u.email);
-  const hint = existing ? '\n(이미 시트에 있는 빈 이름을 그대로 입력하면 이메일이 자동 매핑됩니다)' : '';
-  const name = (prompt('등록할 이름을 입력하세요' + hint) || '').trim();
+async function addUserPrompt() {
+  const name = (prompt('등록할 이름을 입력하세요') || '').trim();
   if (!name) return;
   try {
     const res = await api('addUser', { name });
-    // users 새로고침
     state.users = await api('getAllUsers');
+    usersCache.set(state.users);
     state.currentUser = res.name;
     localStorage.setItem('todo_last_user', res.name);
-    renderAuthArea();
     renderUserTabs();
-    renderRoBanner();
     await loadUserAll();
-    showToast(res.claimed ? '본인으로 매핑됨: ' + name : '등록됨: ' + name);
+    showToast('등록됨: ' + name);
   } catch (e) {
     showToast('등록 실패: ' + e.message, true);
   }
@@ -1561,9 +1378,8 @@ function renderShortcuts() {
 // Mutations
 // ═════════════════════════════════════════════
 function guard() {
-  if (!canEditCurrentTab()) {
-    if (!auth.isValid()) showToast('Google 로그인이 필요합니다', true);
-    else showToast('본인 탭에서만 수정할 수 있습니다', true);
+  if (!state.currentUser) {
+    showToast('사용자 탭을 선택해주세요', true);
     return false;
   }
   return true;
@@ -2312,65 +2128,6 @@ function buildBuckets(bucketType, start, end, compIn, createdIn) {
 }
 
 // ═════════════════════════════════════════════
-// Auth: silent refresh (토큰 만료 전 자동 재발급)
-// ─────────────────────────────────────────────
-// Google ID Token 은 발급 시점부터 1시간 후 만료(Google 강제).
-// auto_select: true 설정 덕분에 prompt() 호출 시
-// 사용자가 Google 에 로그인된 상태면 UI 없이 새 토큰을 받아옴.
-// → 만료 5분 전부터 미리 갱신해서 사실상 끊김 없는 세션 유지.
-// ═════════════════════════════════════════════
-let _refreshInFlight = false;
-
-function refreshTokenIfNeeded(force) {
-  if (_refreshInFlight) return;
-  if (!auth.idToken) return;
-  const msLeft = auth.exp * 1000 - Date.now();
-  // 만료 5분 전부터 갱신, 또는 force=true
-  if (!force && msLeft > 5 * 60 * 1000) return;
-  if (!window.google || !google.accounts || !google.accounts.id) return;
-
-  _refreshInFlight = true;
-  try {
-    // initGIS()가 안 됐다면 한 번 더 (안전장치)
-    initGIS();
-    // auto_select: true 덕분에 사용자 인터랙션 없이 새 credential 발급 시도
-    google.accounts.id.prompt();
-  } catch (e) {
-    console.warn('[auth refresh] prompt failed', e);
-  }
-  // 30초 락 (콜백 후 자동 풀림)
-  setTimeout(() => { _refreshInFlight = false; }, 30000);
-}
-
-// 새 토큰을 받으면 락 즉시 해제
-const _origHandleCred = window.handleCredentialResponse;
-window.handleCredentialResponse = function(response) {
-  _refreshInFlight = false;
-  _origHandleCred(response);
-};
-
-// 1분마다 토큰 상태 체크
-setInterval(() => {
-  if (!auth.idToken) return;
-
-  // 만료 임박 → silent refresh
-  refreshTokenIfNeeded();
-
-  // 그래도 만료됐다면 (refresh 실패 케이스)
-  if (Date.now() >= auth.exp * 1000) {
-    auth.clear();
-    renderAuthArea();
-    renderUserTabs();
-    renderRoBanner();
-    renderAll();
-    showToast('세션이 만료되었습니다. 다시 로그인해 주세요.', true);
-    if (window.google && google.accounts && google.accounts.id) {
-      google.accounts.id.prompt();
-    }
-  }
-}, 60 * 1000);
-
-// ═════════════════════════════════════════════
 // Events
 // ═════════════════════════════════════════════
 $('#addTodoBtn').addEventListener('click', addTodoFromInput);
@@ -2393,7 +2150,7 @@ setInterval(() => {
   const now = activeDayStr();
   if (now !== _lastActiveDay) {
     _lastActiveDay = now;
-    if (state.currentUser && auth.isValid()) {
+    if (state.currentUser) {
       console.log('[activeDay] changed → reload', now);
       loadUserAll();
     }
@@ -2403,13 +2160,10 @@ setInterval(() => {
 // 탭 다시 활성화 시에도 한 번 체크
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') return;
-  // 1) 토큰 만료 임박이면 즉시 갱신 시도
-  refreshTokenIfNeeded();
-  // 2) 활동일 변경 체크
   const now = activeDayStr();
   if (now !== _lastActiveDay) {
     _lastActiveDay = now;
-    if (state.currentUser && auth.isValid()) loadUserAll();
+    if (state.currentUser) loadUserAll();
   }
 });
 
@@ -2444,18 +2198,6 @@ window.addEventListener('beforeunload', () => queue.beacon());
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') queue.beacon();
 });
-
-// GIS 라이브러리 로드 polling (async script)
-let gisPoll = setInterval(() => {
-  if (window.google && google.accounts && google.accounts.id) {
-    clearInterval(gisPoll);
-    if (initGIS() && !auth.isValid()) {
-      // 저장된 세션 없고 GIS 준비됨 → 자동 prompt
-      google.accounts.id.prompt();
-    }
-  }
-}, 200);
-setTimeout(() => clearInterval(gisPoll), 10000);
 
 // 시작
 boot();
